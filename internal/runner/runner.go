@@ -8,7 +8,7 @@ import (
 	"todo-runner-cli/internal/task"
 )
 
-type TaskRunnerService interface {
+type TaskService interface {
 	ValidateQueuedTaskCount() error
 	QueuedTasks() []task.Task
 	Stats() task.TaskStats
@@ -19,7 +19,7 @@ type TaskProcessor interface {
 	Process(ctx context.Context, task task.Task) (task.Result, error)
 }
 
-func PushTasksToQueue(ctx context.Context, tasksChan chan<- task.Task, service TaskRunnerService) {
+func PushTasksToQueue(ctx context.Context, tasksChan chan<- task.Task, service TaskService) {
 	defer close(tasksChan)
 
 	for _, current := range service.QueuedTasks() {
@@ -32,7 +32,7 @@ func PushTasksToQueue(ctx context.Context, tasksChan chan<- task.Task, service T
 	}
 }
 
-func ReadProcessed(ctx context.Context, processed <-chan task.Result, service TaskRunnerService) {
+func ReadProcessed(ctx context.Context, processed <-chan task.Result, service TaskService) {
 	for {
 		select {
 		case result, ok := <-processed:
@@ -92,7 +92,7 @@ func StartRunnerPool(ctx context.Context, runnerCount int, tasks <-chan task.Tas
 	}()
 }
 
-func StartProgressReporter(ctx context.Context, service TaskRunnerService, stop <-chan struct{}, print func(stats task.TaskStats)) {
+func StartProgressReporter(ctx context.Context, service TaskService, stop <-chan struct{}, print func(stats task.TaskStats)) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	fmt.Println("Progress reporter started")
@@ -108,7 +108,7 @@ func StartProgressReporter(ctx context.Context, service TaskRunnerService, stop 
 	}
 }
 
-func Run(ctx context.Context, service TaskRunnerService, runnerCount int, processor TaskProcessor, print func(stats task.TaskStats)) {
+func Run(ctx context.Context, service TaskService, runnerCount int, processor TaskProcessor, print func(stats task.TaskStats)) {
 	tasks := make(chan task.Task, runnerCount)
 	processed := make(chan task.Result, runnerCount)
 	collectorDone := make(chan struct{})

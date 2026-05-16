@@ -5,19 +5,19 @@ import (
 	"sync"
 )
 
-type TaskStatus string
+type Status string
 
 const (
-	Queued TaskStatus = "queued"
-	Done   TaskStatus = "done"
-	Failed TaskStatus = "failed"
+	Queued Status = "queued"
+	Done   Status = "done"
+	Failed Status = "failed"
 )
 
 type Task struct {
 	ID                int
 	Name              string
 	DurationInSeconds int
-	Status            TaskStatus
+	Status            Status
 }
 
 var (

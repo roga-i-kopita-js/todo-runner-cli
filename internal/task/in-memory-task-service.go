@@ -7,6 +7,11 @@ import (
 
 type Status string
 
+var (
+	ErrInvalidQueuedTasks = errors.New("no queued tasks")
+	ErrInvalidTaskID      = errors.New("invalid task id")
+)
+
 const (
 	Queued Status = "queued"
 	Done   Status = "done"
@@ -19,11 +24,6 @@ type Task struct {
 	DurationInSeconds int
 	Status            Status
 }
-
-var (
-	ErrInvalidQueuedTasks = errors.New("no queued tasks")
-	ErrInvalidTaskID      = errors.New("invalid task id")
-)
 
 type TaskStats struct {
 	Queued int

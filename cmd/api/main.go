@@ -31,6 +31,7 @@ func main() {
 	fmt.Println("Type a command or 'exit' to quit:")
 	ctx, cancel := context.WithCancel(context.Background())
 	runnerCount := 3
+
 	scanner := bufio.NewScanner(os.Stdin)
 	taskService := task.NewInMemoryTaskService()
 	taskProcessor := processor.SimpleTaskProcessor{}

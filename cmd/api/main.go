@@ -11,20 +11,8 @@ import (
 	"todo-runner-cli/internal/task"
 )
 
-type TaskAddService interface {
-	Add(task task.AddTaskInput) task.Task
-}
-
-func Add(taskService TaskAddService, newTask command.ParsedCommand) {
-	created := taskService.Add(task.AddTaskInput{
-		Name:     newTask.Name,
-		Duration: newTask.Duration,
-	})
-	fmt.Println("queued:", created.ID)
-}
-
 func PrintStatsInfo(stats task.TaskStats) {
-	fmt.Println("Queued:", stats.Queued, "Done:", stats.Done, "Failed:", stats.Failed)
+	fmt.Println("Queued:", stats.Queued, "Done:", stats.Done, "Failed:", stats.Failed, "Running:", stats.Running, "Cancelled:", stats.Cancelled)
 }
 
 func main() {
@@ -33,20 +21,32 @@ func main() {
 	runnerCount := 3
 
 	scanner := bufio.NewScanner(os.Stdin)
-	taskService := task.NewInMemoryTaskService()
+
+	storage := task.NewInMemoryTaskStorage()
+	taskService := task.NewTaskService(storage)
 	taskProcessor := processor.SimpleTaskProcessor{}
 
 	for scanner.Scan() {
 		text := scanner.Text()
 		commandModule, err := command.NewCommand(text, command.Actions{
 			Add: func(newTask command.ParsedCommand) {
-				Add(taskService, newTask)
+				created, err := taskService.Add(task.AddTaskInput{
+					Name:     newTask.Name,
+					Duration: newTask.Duration,
+				})
+
+				if err != nil {
+					fmt.Println("Err:", err.Error())
+					return
+				}
+
+				fmt.Println("queued ID:", created.ID)
 			},
 			Run: func() {
 				runner.Run(ctx, taskService, runnerCount, taskProcessor, PrintStatsInfo)
 			},
 			Stats: func() {
-				PrintStatsInfo(taskService.Stats())
+				PrintStatsInfo(taskService.GetStats())
 			},
 		})
 

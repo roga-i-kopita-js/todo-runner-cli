@@ -9,10 +9,9 @@ import (
 )
 
 type TaskService interface {
-	ValidateQueuedTaskCount() error
+	UpdateTask(taskResult task.Result) (task.Task, error)
 	QueuedTasks() []task.Task
-	Stats() task.TaskStats
-	MarkProcessed(result task.Result) error
+	GetStats() task.TaskStats
 }
 
 type TaskProcessor interface {
@@ -32,25 +31,17 @@ func PushTasksToQueue(ctx context.Context, tasksChan chan<- task.Task, service T
 	}
 }
 
-func ReadProcessed(ctx context.Context, processed <-chan task.Result, service TaskService) {
-	for {
-		select {
-		case result, ok := <-processed:
-			if !ok {
-				return
-			}
-			err := service.MarkProcessed(result)
-			if err != nil {
-				fmt.Println(err)
-				continue
-			}
-		case <-ctx.Done():
-			return
+func ReadProcessed(processed <-chan task.Result, service TaskService) {
+	for result := range processed {
+		_, err := service.UpdateTask(result)
+		if err != nil {
+			fmt.Println(err)
+			continue
 		}
 	}
 }
 
-func StartRunner(ctx context.Context, tasks <-chan task.Task, processed chan<- task.Result, processor TaskProcessor) {
+func StartRunner(ctx context.Context, tasks <-chan task.Task, processed chan<- task.Result, processor TaskProcessor, service TaskService) {
 	fmt.Println("Runner started")
 	for {
 		select {
@@ -60,21 +51,26 @@ func StartRunner(ctx context.Context, tasks <-chan task.Task, processed chan<- t
 			if !ok {
 				return
 			}
-			resultedTask, err := processor.Process(ctx, current)
+			result := task.Result{ID: current.ID, Name: current.Name, Status: task.Running}
+			_, err := service.UpdateTask(result)
+
 			if err != nil {
-				return
+				continue
 			}
-			select {
-			case <-ctx.Done():
-				return
-			case processed <- resultedTask:
-				fmt.Println("Task", current.Name, "processed")
+
+			resultedTask, err := processor.Process(ctx, current)
+
+			if err != nil {
+				fmt.Println(err)
 			}
+
+			processed <- resultedTask
+			fmt.Println("Task", current.Name, "processed")
 		}
 	}
 }
 
-func StartRunnerPool(ctx context.Context, runnerCount int, tasks <-chan task.Task, processed chan<- task.Result, processor TaskProcessor) {
+func StartRunnerPool(ctx context.Context, runnerCount int, tasks <-chan task.Task, processed chan<- task.Result, processor TaskProcessor, service TaskService) {
 	fmt.Println("Starting runner pool, count is:", runnerCount)
 	wg := &sync.WaitGroup{}
 	wg.Add(runnerCount)
@@ -82,7 +78,7 @@ func StartRunnerPool(ctx context.Context, runnerCount int, tasks <-chan task.Tas
 	for i := 0; i < runnerCount; i++ {
 		go func() {
 			defer wg.Done()
-			StartRunner(ctx, tasks, processed, processor)
+			StartRunner(ctx, tasks, processed, processor, service)
 		}()
 	}
 
@@ -99,7 +95,7 @@ func StartProgressReporter(ctx context.Context, service TaskService, stop <-chan
 	for {
 		select {
 		case <-ticker.C:
-			print(service.Stats())
+			print(service.GetStats())
 		case <-ctx.Done():
 			return
 		case <-stop:
@@ -114,8 +110,9 @@ func Run(ctx context.Context, service TaskService, runnerCount int, processor Ta
 	collectorDone := make(chan struct{})
 	stopProgress := make(chan struct{})
 
-	queueCount := service.ValidateQueuedTaskCount()
-	if queueCount != nil {
+	queueCount := len(service.QueuedTasks())
+
+	if queueCount <= 0 {
 		fmt.Println(queueCount)
 		return
 	}
@@ -123,10 +120,10 @@ func Run(ctx context.Context, service TaskService, runnerCount int, processor Ta
 	go StartProgressReporter(ctx, service, stopProgress, print)
 
 	go func() {
-		ReadProcessed(ctx, processed, service)
+		ReadProcessed(processed, service)
 		close(collectorDone)
 	}()
-	StartRunnerPool(ctx, runnerCount, tasks, processed, processor)
+	StartRunnerPool(ctx, runnerCount, tasks, processed, processor, service)
 
 	PushTasksToQueue(ctx, tasks, service)
 	<-collectorDone

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -18,10 +19,32 @@ type TaskProcessor interface {
 	Process(ctx context.Context, task task.Task) (task.Result, error)
 }
 
-func PushTasksToQueue(ctx context.Context, tasksChan chan<- task.Task, service TaskService) {
+type Printer interface {
+	PrintStats(stats task.TaskStats)
+}
+
+type TaskRunner struct {
+	service   TaskService
+	processor TaskProcessor
+	printer   Printer
+}
+
+var (
+	ErrInvalidRunnersCount = errors.New("runner count must be positive")
+)
+
+func NewTaskRunner(service TaskService, processor TaskProcessor, printer Printer) *TaskRunner {
+	return &TaskRunner{
+		service:   service,
+		processor: processor,
+		printer:   printer,
+	}
+}
+
+func (r *TaskRunner) pushTasksToQueue(ctx context.Context, tasksChan chan<- task.Task) {
 	defer close(tasksChan)
 
-	for _, current := range service.QueuedTasks() {
+	for _, current := range r.service.QueuedTasks() {
 		select {
 		case tasksChan <- current:
 			continue
@@ -31,9 +54,9 @@ func PushTasksToQueue(ctx context.Context, tasksChan chan<- task.Task, service T
 	}
 }
 
-func ReadProcessed(processed <-chan task.Result, service TaskService) {
+func (r *TaskRunner) readProcessed(processed <-chan task.Result) {
 	for result := range processed {
-		_, err := service.UpdateTask(result)
+		_, err := r.service.UpdateTask(result)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -41,7 +64,14 @@ func ReadProcessed(processed <-chan task.Result, service TaskService) {
 	}
 }
 
-func StartRunner(ctx context.Context, tasks <-chan task.Task, processed chan<- task.Result, processor TaskProcessor, service TaskService) {
+func validateRunnersCount(count int) error {
+	if count <= 0 {
+		return ErrInvalidRunnersCount
+	}
+	return nil
+}
+
+func (r *TaskRunner) startRunner(ctx context.Context, tasks <-chan task.Task, processed chan<- task.Result) {
 	fmt.Println("Runner started")
 	for {
 		select {
@@ -51,14 +81,14 @@ func StartRunner(ctx context.Context, tasks <-chan task.Task, processed chan<- t
 			if !ok {
 				return
 			}
-			result := task.Result{ID: current.ID, Name: current.Name, Status: task.Running}
-			_, err := service.UpdateTask(result)
+			result := task.Result{ID: current.ID, Status: task.Running}
+			_, err := r.service.UpdateTask(result)
 
 			if err != nil {
 				continue
 			}
 
-			resultedTask, err := processor.Process(ctx, current)
+			resultedTask, err := r.processor.Process(ctx, current)
 
 			if err != nil {
 				fmt.Println(err)
@@ -70,7 +100,7 @@ func StartRunner(ctx context.Context, tasks <-chan task.Task, processed chan<- t
 	}
 }
 
-func StartRunnerPool(ctx context.Context, runnerCount int, tasks <-chan task.Task, processed chan<- task.Result, processor TaskProcessor, service TaskService) {
+func (r *TaskRunner) startRunnerPool(ctx context.Context, runnerCount int, tasks <-chan task.Task, processed chan<- task.Result) {
 	fmt.Println("Starting runner pool, count is:", runnerCount)
 	wg := &sync.WaitGroup{}
 	wg.Add(runnerCount)
@@ -78,7 +108,7 @@ func StartRunnerPool(ctx context.Context, runnerCount int, tasks <-chan task.Tas
 	for i := 0; i < runnerCount; i++ {
 		go func() {
 			defer wg.Done()
-			StartRunner(ctx, tasks, processed, processor, service)
+			r.startRunner(ctx, tasks, processed)
 		}()
 	}
 
@@ -88,14 +118,14 @@ func StartRunnerPool(ctx context.Context, runnerCount int, tasks <-chan task.Tas
 	}()
 }
 
-func StartProgressReporter(ctx context.Context, service TaskService, stop <-chan struct{}, print func(stats task.TaskStats)) {
+func (r *TaskRunner) startProgressReporter(ctx context.Context, stop <-chan struct{}) {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	fmt.Println("Progress reporter started")
 	for {
 		select {
 		case <-ticker.C:
-			print(service.GetStats())
+			r.printer.PrintStats(r.service.GetStats())
 		case <-ctx.Done():
 			return
 		case <-stop:
@@ -104,29 +134,36 @@ func StartProgressReporter(ctx context.Context, service TaskService, stop <-chan
 	}
 }
 
-func Run(ctx context.Context, service TaskService, runnerCount int, processor TaskProcessor, print func(stats task.TaskStats)) {
+func (r *TaskRunner) Run(ctx context.Context, runnerCount int) error {
+	err := validateRunnersCount(runnerCount)
+	if err != nil {
+		return err
+	}
+
 	tasks := make(chan task.Task, runnerCount)
 	processed := make(chan task.Result, runnerCount)
 	collectorDone := make(chan struct{})
 	stopProgress := make(chan struct{})
 
-	queueCount := len(service.QueuedTasks())
+	queueCount := len(r.service.QueuedTasks())
 
 	if queueCount <= 0 {
 		fmt.Println(queueCount)
-		return
+		return nil
 	}
 
-	go StartProgressReporter(ctx, service, stopProgress, print)
+	go r.startProgressReporter(ctx, stopProgress)
 
 	go func() {
-		ReadProcessed(processed, service)
+		r.readProcessed(processed)
 		close(collectorDone)
 	}()
-	StartRunnerPool(ctx, runnerCount, tasks, processed, processor, service)
+	r.startRunnerPool(ctx, runnerCount, tasks, processed)
 
-	PushTasksToQueue(ctx, tasks, service)
+	r.pushTasksToQueue(ctx, tasks)
 	<-collectorDone
 	close(stopProgress)
 	fmt.Println("run completed")
+	r.printer.PrintStats(r.service.GetStats())
+	return nil
 }

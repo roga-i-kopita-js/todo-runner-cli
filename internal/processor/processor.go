@@ -15,7 +15,7 @@ var (
 type SimpleTaskProcessor struct{}
 
 func (p SimpleTaskProcessor) Process(ctx context.Context, current task.Task) (task.Result, error) {
-	resultedTask := task.Result{ID: current.ID, Name: current.Name}
+	resultedTask := task.Result{ID: current.ID}
 	select {
 	case <-ctx.Done():
 		resultedTask.Status = task.Cancelled

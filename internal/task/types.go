@@ -20,9 +20,9 @@ type Task struct {
 
 type TaskStats struct {
 	Queued    int
+	Running   int
 	Done      int
 	Failed    int
-	Running   int
 	Cancelled int
 }
 
@@ -44,7 +44,6 @@ type GetListFilterParams struct {
 
 type Result struct {
 	ID     int
-	Name   string
 	Error  error
 	Status Status
 }

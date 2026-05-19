@@ -11,7 +11,10 @@ import (
 	"todo-runner-cli/internal/task"
 )
 
-func PrintStatsInfo(stats task.TaskStats) {
+type Printer struct {
+}
+
+func (f Printer) PrintStats(stats task.TaskStats) {
 	fmt.Println("Queued:", stats.Queued, "Done:", stats.Done, "Failed:", stats.Failed, "Running:", stats.Running, "Cancelled:", stats.Cancelled)
 }
 
@@ -25,6 +28,8 @@ func main() {
 	storage := task.NewInMemoryTaskStorage()
 	taskService := task.NewTaskService(storage)
 	taskProcessor := processor.SimpleTaskProcessor{}
+	printer := Printer{}
+	taskRunner := runner.NewTaskRunner(taskService, taskProcessor, printer)
 
 	for scanner.Scan() {
 		text := scanner.Text()
@@ -43,10 +48,13 @@ func main() {
 				fmt.Println("queued ID:", created.ID)
 			},
 			Run: func() {
-				runner.Run(ctx, taskService, runnerCount, taskProcessor, PrintStatsInfo)
+				err := taskRunner.Run(ctx, runnerCount)
+				if err != nil {
+					fmt.Println("Error running tasks:", err)
+				}
 			},
 			Stats: func() {
-				PrintStatsInfo(taskService.GetStats())
+				printer.PrintStats(taskService.GetStats())
 			},
 		})
 

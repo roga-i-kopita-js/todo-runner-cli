@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"todo-runner-cli/internal/task"
@@ -30,12 +31,6 @@ func (p *FakeProcessor) Process(ctx context.Context, current task.Task) (task.Re
 	}
 }
 
-type FakePrinter struct {
-}
-
-func (f FakePrinter) PrintStats(_stats task.TaskStats) {
-}
-
 func TestRunner_Run(t *testing.T) {
 	t.Run("Happy", func(t *testing.T) {
 		ctx := context.Background()
@@ -59,7 +54,7 @@ func TestRunner_Run(t *testing.T) {
 			t.Fatal(err3)
 		}
 		processor := &FakeProcessor{}
-		runner := NewTaskRunner(service, processor, FakePrinter{})
+		runner := NewTaskRunner(service, processor, slog.New(slog.DiscardHandler))
 		err4 := runner.Run(ctx, 3)
 		if err4 != nil {
 			t.Fatal(err3)
@@ -111,7 +106,7 @@ func TestRunner_Run(t *testing.T) {
 		}
 
 		processor := &FakeProcessor{}
-		runner := NewTaskRunner(service, processor, FakePrinter{})
+		runner := NewTaskRunner(service, processor, slog.New(slog.DiscardHandler))
 		err7 := runner.Run(ctx, 3)
 		if err7 != nil {
 			t.Fatal(err7)
@@ -134,7 +129,7 @@ func TestRunner_Run(t *testing.T) {
 		service := task.NewTaskService(storage)
 
 		processor := &FakeProcessor{}
-		runner := NewTaskRunner(service, processor, FakePrinter{})
+		runner := NewTaskRunner(service, processor, slog.New(slog.DiscardHandler))
 		err := runner.Run(ctx, 3)
 		if err != nil {
 			t.Fatal(err)

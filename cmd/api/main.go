@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"todo-runner-cli/internal/command"
 	"todo-runner-cli/internal/processor"
@@ -24,24 +25,27 @@ func main() {
 	runnerCount := 3
 
 	scanner := bufio.NewScanner(os.Stdin)
-
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
 	storage := task.NewInMemoryTaskStorage()
 	taskService := task.NewTaskService(storage)
 	taskProcessor := processor.SimpleTaskProcessor{}
 	printer := Printer{}
-	taskRunner := runner.NewTaskRunner(taskService, taskProcessor, printer)
-
+	taskRunner := runner.NewTaskRunner(taskService, taskProcessor, logger)
 	for scanner.Scan() {
 		text := scanner.Text()
 		commandModule, err := command.NewCommand(text, command.Actions{
 			Add: func(newTask command.ParsedCommand) {
-				created, err := taskService.Add(task.AddTaskInput{
+				input := task.AddTaskInput{
 					Name:     newTask.Name,
 					Duration: newTask.Duration,
-				})
+				}
+				created, err := taskService.Add(input)
 
 				if err != nil {
-					fmt.Println("Err:", err.Error())
+					logger.Error("failed to add task", "task_input", input, "error", err)
+					fmt.Fprintln(os.Stderr, "Failed to add task:", err)
 					return
 				}
 
@@ -50,8 +54,12 @@ func main() {
 			Run: func() {
 				err := taskRunner.Run(ctx, runnerCount)
 				if err != nil {
-					fmt.Println("Error running tasks:", err)
+					logger.Error("failed to run tasks", "error", err)
+					fmt.Fprintln(os.Stderr, "Failed to run tasks:", err)
+					return
 				}
+
+				printer.PrintStats(taskService.GetStats())
 			},
 			Stats: func() {
 				printer.PrintStats(taskService.GetStats())
@@ -59,7 +67,8 @@ func main() {
 		})
 
 		if err != nil {
-			fmt.Println(err)
+			logger.Warn("invalid command input", "input", text, "error", err)
+			fmt.Fprintln(os.Stderr, "Invalid command:", err)
 			continue
 		}
 

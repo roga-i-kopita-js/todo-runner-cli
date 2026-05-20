@@ -2,6 +2,7 @@ package command
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -62,15 +63,16 @@ func (c *Command) validateAddTaskFormat() (ParsedCommand, error) {
 	parts := strings.Fields(string(c.raw))
 
 	if len(parts) != 3 {
-		return t, ErrInvalidAddTask
+		return t, fmt.Errorf("command validate add: raw command %q: %w", string(c.raw), ErrInvalidAddTask)
 	}
 
 	duration, err := strconv.Atoi(parts[2])
 	if err != nil {
-		return t, ErrInvalidTaskDuration
+		return t, fmt.Errorf("command validate add: duration %q is not a number: %w", parts[2], ErrInvalidTaskDuration)
 	}
+
 	if duration <= 0 {
-		return t, ErrInvalidTaskDurationValue
+		return t, fmt.Errorf("command validate add: duration %d must be positive: %w", duration, ErrInvalidTaskDurationValue)
 	}
 
 	return ParsedCommand{
@@ -85,7 +87,7 @@ func (c *Command) validateRunTaskFormat() (ParsedCommand, error) {
 	parts := strings.Fields(string(c.raw))
 
 	if len(parts) > 1 {
-		return t, ErrUnknownArguments
+		return t, fmt.Errorf("command validate run: raw command %q: %w", string(c.raw), ErrUnknownArguments)
 	}
 
 	return ParsedCommand{Command: parts[0]}, nil
@@ -97,7 +99,7 @@ func (c *Command) validateStatsTaskFormat() (ParsedCommand, error) {
 	parts := strings.Fields(string(c.raw))
 
 	if len(parts) > 1 {
-		return t, ErrUnknownArguments
+		return t, fmt.Errorf("command validate stats: raw command %q: %w", string(c.raw), ErrUnknownArguments)
 	}
 
 	return ParsedCommand{Command: parts[0]}, nil
@@ -108,7 +110,7 @@ func (c *Command) validateExitTaskFormat() (ParsedCommand, error) {
 	parts := strings.Fields(string(c.raw))
 
 	if len(parts) > 1 {
-		return t, ErrUnknownArguments
+		return t, fmt.Errorf("command invalid exit command %v, %w", string(c.raw), ErrUnknownArguments)
 	}
 
 	return ParsedCommand{Command: parts[0]}, nil
@@ -118,7 +120,7 @@ func (c *Command) validate() error {
 	parts := strings.Fields(string(c.raw))
 
 	if len(parts) == 0 {
-		return ErrInvalidTaskCommand
+		return fmt.Errorf("command validate: empty command %q: %w", string(c.raw), ErrInvalidTaskCommand)
 	}
 
 	switch parts[0] {
@@ -158,6 +160,6 @@ func (c *Command) validate() error {
 
 		return nil
 	default:
-		return ErrInvalidTaskCommand
+		return fmt.Errorf("command validate: unknown command %q: %w", parts[0], ErrInvalidTaskCommand)
 	}
 }

@@ -2,6 +2,7 @@ package task
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -11,6 +12,7 @@ var (
 	ErrInvalidStatus       = errors.New("invalid status, must be one of: 'queued' 'running' 'done' 'failed' 'cancelled'")
 	ErrInvalidTaskName     = errors.New("invalid name")
 	ErrInvalidTaskDuration = errors.New("invalid Duration in seconds, must be grater then 0")
+	ErrInvalidTaskID       = errors.New("invalid task ID, must be grater then 0")
 )
 
 const (
@@ -30,11 +32,11 @@ func NewInMemoryTaskStorage() *Storage {
 
 func validateTaskInput(input AddTaskInput) error {
 	if strings.TrimSpace(input.Name) == "" {
-		return ErrInvalidTaskName
+		return fmt.Errorf("in-memory storage invalid task name: %w, got: %q", ErrInvalidTaskName, input.Name)
 	}
 
 	if input.Duration <= 0 {
-		return ErrInvalidTaskDuration
+		return fmt.Errorf("in-memory storage invalid task duration: %w, got: %d", ErrInvalidTaskDuration, input.Duration)
 	}
 
 	return nil
@@ -46,7 +48,7 @@ func (t *Storage) Add(task AddTaskInput) (Task, error) {
 	err := validateTaskInput(task)
 
 	if err != nil {
-		return Task{}, err
+		return Task{}, fmt.Errorf("in-memory storage Add, invalid task input: %w", err)
 	}
 
 	created := Task{ID: t.nextID, Name: task.Name, DurationInSeconds: task.Duration, Status: Queued, CreatedAt: time.Now()}
@@ -59,13 +61,18 @@ func (t *Storage) Add(task AddTaskInput) (Task, error) {
 }
 
 func (t *Storage) GetByID(id int) (Task, error) {
+	err := ValidateId(id)
+	if err != nil {
+		return Task{}, fmt.Errorf("in-memory storage GetByID, invalid task id %d, err : %w", id, err)
+	}
+
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
 
 	task, ok := t.tasks[id]
 
 	if !ok {
-		return task, ErrTaskNotFound
+		return task, fmt.Errorf("in-memory storage GetByID, task with id: %d not found: %w", id, ErrTaskNotFound)
 	}
 
 	return task, nil
@@ -79,13 +86,31 @@ func ValidateStatus(status Status) error {
 	return nil
 }
 
+func ValidateId(id int) error {
+	if id <= 0 {
+		return ErrInvalidTaskID
+	}
+	return nil
+}
+
+func validateIds(ids []int) error {
+	for _, id := range ids {
+		err := ValidateId(id)
+		if err != nil {
+			return fmt.Errorf("in-memory storage, invalid task ID: %d: %w", id, err)
+		}
+	}
+
+	return nil
+}
+
 func validateStatuses(statuses []Status) error {
 	var err error
 
 	for _, status := range statuses {
 		statusErr := ValidateStatus(status)
 		if statusErr != nil {
-			err = statusErr
+			err = fmt.Errorf("in-memory storage, invalid task status %q: %w", status, statusErr)
 			break
 		}
 	}
@@ -146,20 +171,28 @@ func getSlice(tasks map[int]Task) []Task {
 }
 
 func (t *Storage) GetList(filter GetListFilterParams) ([]Task, error) {
+	// валидируем переданные статусы
+	if len(filter.Statuses) > 0 {
+		err := validateStatuses(filter.Statuses)
+		if err != nil {
+			return []Task{}, fmt.Errorf("in-memory storage GetList: %w", err)
+		}
+	}
+
+	// валидируем переданные айдишникиь
+	if len(filter.IDs) > 0 {
+		err := validateIds(filter.IDs)
+		if err != nil {
+			return []Task{}, fmt.Errorf("in-memory storage GetList: %w", err)
+		}
+	}
+
 	t.mutex.RLock()
 	defer t.mutex.RUnlock()
 
 	// если параметров нет, то собираем слайс из всех элементов в мап
 	if len(filter.IDs) == 0 && len(filter.Statuses) == 0 {
 		return getSlice(t.tasks), nil
-	}
-
-	// валидируем переданные статусы
-	if len(filter.Statuses) > 0 {
-		err := validateStatuses(filter.Statuses)
-		if err != nil {
-			return []Task{}, err
-		}
 	}
 
 	// кейс 1: переданы оба параметра
@@ -210,17 +243,22 @@ func (t *Storage) GetStats() TaskStats {
 }
 
 func (t *Storage) UpdateTask(taskResult Result) (Task, error) {
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
+	idErr := ValidateId(taskResult.ID)
+	if idErr != nil {
+		return Task{}, fmt.Errorf("in-memory storage UpdateTask: %w, Id: %d is incorrect", idErr, taskResult.ID)
+	}
 
 	statusErr := ValidateStatus(taskResult.Status)
 	if statusErr != nil {
-		return Task{}, statusErr
+		return Task{}, fmt.Errorf("in-memory storage: invalid status: %w, got: %q", statusErr, taskResult.Status)
 	}
+
+	t.mutex.Lock()
+	defer t.mutex.Unlock()
 
 	task, ok := t.tasks[taskResult.ID]
 	if !ok {
-		return Task{}, ErrTaskNotFound
+		return Task{}, fmt.Errorf("in-memory storage: task with id: %d, not found: %w", taskResult.ID, ErrTaskNotFound)
 	}
 
 	task.Status = taskResult.Status

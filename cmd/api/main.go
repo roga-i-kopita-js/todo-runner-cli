@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"todo-runner-cli/internal/command"
+	"todo-runner-cli/internal/config"
 	"todo-runner-cli/internal/processor"
 	"todo-runner-cli/internal/runner"
 	"todo-runner-cli/internal/task"
@@ -19,15 +20,53 @@ func (f Printer) PrintStats(stats task.TaskStats) {
 	fmt.Println("Queued:", stats.Queued, "Done:", stats.Done, "Failed:", stats.Failed, "Running:", stats.Running, "Cancelled:", stats.Cancelled)
 }
 
+func NewLogger(level string, format string) *slog.Logger {
+	var lvl slog.Level
+
+	switch level {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "info":
+		lvl = slog.LevelInfo
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+
+	var handler slog.Handler
+	switch format {
+	case "text":
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: lvl,
+		})
+	case "json":
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: lvl,
+		})
+	default:
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: lvl,
+		})
+	}
+
+	return slog.New(handler)
+}
+
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to load config:", err)
+		os.Exit(1)
+	}
 	fmt.Println("Type a command or 'exit' to quit:")
 	ctx, cancel := context.WithCancel(context.Background())
-	runnerCount := 3
+	defer cancel()
 
 	scanner := bufio.NewScanner(os.Stdin)
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
-	}))
+	logger := NewLogger(cfg.LogLevel, cfg.LogFormat)
 	storage := task.NewInMemoryTaskStorage()
 	taskService := task.NewTaskService(storage)
 	taskProcessor := processor.SimpleTaskProcessor{}
@@ -52,7 +91,7 @@ func main() {
 				fmt.Println("queued ID:", created.ID)
 			},
 			Run: func() {
-				err := taskRunner.Run(ctx, runnerCount)
+				err := taskRunner.Run(ctx, cfg.RunnerCount)
 				if err != nil {
 					logger.Error("failed to run tasks", "error", err)
 					fmt.Fprintln(os.Stderr, "Failed to run tasks:", err)
@@ -76,7 +115,6 @@ func main() {
 
 		if shouldCancel {
 			fmt.Println("..exiting")
-			cancel()
 			return
 		}
 	}

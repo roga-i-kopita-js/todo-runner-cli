@@ -1,23 +1,68 @@
 package main
 
 import (
-	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
-	"todo-runner-cli/internal/command"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 	"todo-runner-cli/internal/config"
 	"todo-runner-cli/internal/processor"
 	"todo-runner-cli/internal/runner"
 	"todo-runner-cli/internal/task"
 )
 
-type Printer struct {
+type ErrorResponse struct {
+	Error string `json:"error"`
 }
 
-func (f Printer) PrintStats(stats task.TaskStats) {
-	fmt.Println("Queued:", stats.Queued, "Done:", stats.Done, "Failed:", stats.Failed, "Running:", stats.Running, "Cancelled:", stats.Cancelled)
+type AddTaskRequest struct {
+	Name              string `json:"name"`
+	DurationInSeconds int    `json:"duration_seconds"`
+}
+
+type AddTaskResponse struct {
+	ID                int    `json:"id"`
+	Name              string `json:"name"`
+	DurationInSeconds int    `json:"duration_seconds"`
+	Status            string `json:"status"`
+}
+
+type TaskStats struct {
+	Queued   int `json:"queued"`
+	Done     int `json:"done"`
+	Failed   int `json:"failed"`
+	Running  int `json:"running"`
+	Canceled int `json:"canceled"`
+}
+
+type StatusResponse struct {
+	Status string `json:"status"`
+}
+
+func ValidateHeaders(header http.Header) error {
+	var headerErrors error
+	contentType := strings.ToLower(strings.TrimSpace(header.Get("Content-Type")))
+	if !strings.HasPrefix(contentType, "application/json") {
+		headerErrors = errors.New("Content-Type header is not application/json")
+	}
+
+	return headerErrors
+}
+
+func WriteJSON(w http.ResponseWriter, statusCode int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		fmt.Println("failed to write json response:", err)
+	}
 }
 
 func NewLogger(level string, format string) *slog.Logger {
@@ -58,64 +103,107 @@ func NewLogger(level string, format string) *slog.Logger {
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to load config:", err)
-		os.Exit(1)
+		fmt.Println("failed to load config:", err)
+		return
 	}
-	fmt.Println("Type a command or 'exit' to quit:")
+	mux := http.NewServeMux()
+	server := http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
-	scanner := bufio.NewScanner(os.Stdin)
-	logger := NewLogger(cfg.LogLevel, cfg.LogFormat)
 	storage := task.NewInMemoryTaskStorage()
-	taskService := task.NewTaskService(storage)
+	service := task.NewTaskService(storage)
 	taskProcessor := processor.SimpleTaskProcessor{}
-	printer := Printer{}
-	taskRunner := runner.NewTaskRunner(taskService, taskProcessor, logger)
-	for scanner.Scan() {
-		text := scanner.Text()
-		commandModule, err := command.NewCommand(text, command.Actions{
-			Add: func(newTask command.ParsedCommand) {
-				input := task.AddTaskInput{
-					Name:     newTask.Name,
-					Duration: newTask.Duration,
-				}
-				created, err := taskService.Add(input)
+	logger := NewLogger(cfg.LogLevel, cfg.LogFormat)
+	worker := runner.NewTaskRunner(service, taskProcessor, logger)
 
-				if err != nil {
-					logger.Error("failed to add task", "task_input", input, "error", err)
-					fmt.Fprintln(os.Stderr, "Failed to add task:", err)
-					return
-				}
-
-				fmt.Println("queued ID:", created.ID)
-			},
-			Run: func() {
-				err := taskRunner.Run(ctx, cfg.RunnerCount)
-				if err != nil {
-					logger.Error("failed to run tasks", "error", err)
-					fmt.Fprintln(os.Stderr, "Failed to run tasks:", err)
-					return
-				}
-
-				printer.PrintStats(taskService.GetStats())
-			},
-			Stats: func() {
-				printer.PrintStats(taskService.GetStats())
-			},
-		})
-
-		if err != nil {
-			logger.Warn("invalid command input", "input", text, "error", err)
-			fmt.Fprintln(os.Stderr, "Invalid command:", err)
-			continue
-		}
-
-		shouldCancel := commandModule.Execute()
-
-		if shouldCancel {
-			fmt.Println("..exiting")
+	mux.HandleFunc("/tasks", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			WriteJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
 			return
 		}
+
+		headerErr := ValidateHeaders(r.Header)
+		if headerErr != nil {
+			WriteJSON(w, http.StatusNotAcceptable, ErrorResponse{Error: headerErr.Error()})
+			return
+		}
+
+		var payload AddTaskRequest
+		if decodeErr := json.NewDecoder(r.Body).Decode(&payload); decodeErr != nil {
+			WriteJSON(w, http.StatusBadRequest, ErrorResponse{Error: decodeErr.Error()})
+			return
+		}
+
+		result, addErr := service.Add(task.AddTaskInput{Name: payload.Name, Duration: payload.DurationInSeconds})
+		if addErr != nil {
+			WriteJSON(w, http.StatusBadRequest, ErrorResponse{Error: addErr.Error()})
+			return
+		}
+
+		WriteJSON(w, http.StatusCreated, AddTaskResponse{ID: result.ID, Name: result.Name, Status: string(result.Status), DurationInSeconds: result.DurationInSeconds})
+	})
+
+	mux.HandleFunc("/tasks/stats", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			WriteJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
+			return
+		}
+
+		result := service.GetStats()
+
+		WriteJSON(w, http.StatusOK, TaskStats{Queued: result.Queued, Running: result.Running, Done: result.Done, Failed: result.Failed, Canceled: result.Cancelled})
+		return
+	})
+
+	mux.HandleFunc("/tasks/run", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			WriteJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
+			return
+		}
+
+		go func() {
+			runErr := worker.Run(ctx, cfg.RunnerCount)
+			if runErr != nil {
+				logger.Error("failed to run tasks", "error", runErr)
+				return
+			}
+		}()
+
+		WriteJSON(w, http.StatusAccepted, StatusResponse{Status: "started"})
+	})
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			WriteJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
+			return
+		}
+		WriteJSON(w, http.StatusOK, StatusResponse{Status: "ok"})
+	})
+
+	go func() {
+		logger.Info(fmt.Sprintf("Listening on %s", server.Addr))
+
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server error", "error", err.Error())
+		}
+	}()
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+
+	sig := <-signals
+	logger.Info("shutdown signal received:", "signal:", sig)
+	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	shutdownErr := server.Shutdown(shutdownCtx)
+	if shutdownErr != nil {
+		logger.Error("shutdown failed", "error", shutdownErr)
 	}
+	logger.Info("shutdown complete, server stopped")
 }

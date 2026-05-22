@@ -1,0 +1,16 @@
+### Add task 1
+POST http://localhost:8080/tasks
+Content-Type: application/json
+
+{
+    "name": "task 3",
+    "duration_seconds": 4
+}
+
+### GET stats
+GET http://localhost:8080/tasks/stats
+Content-Type: application/json
+
+### Run
+POST http://localhost:8080/tasks/run
+Content-Type: application/json

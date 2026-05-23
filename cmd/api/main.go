@@ -9,13 +9,14 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-	base_api "todo-runner-cli/internal/base-api"
+	"todo-runner-cli/internal/baseapi"
 	"todo-runner-cli/internal/config"
+	"todo-runner-cli/internal/httpresponse"
 	"todo-runner-cli/internal/logger"
 	"todo-runner-cli/internal/processor"
 	"todo-runner-cli/internal/runner"
 	"todo-runner-cli/internal/task"
-	task_api "todo-runner-cli/internal/task-api"
+	"todo-runner-cli/internal/taskapi"
 )
 
 func main() {
@@ -36,10 +37,11 @@ func main() {
 	taskProcessor := processor.SimpleTaskProcessor{}
 	log := logger.NewLogger(cfg.LogLevel, cfg.LogFormat)
 	worker := runner.NewTaskRunner(service, taskProcessor, log)
-	baseHandler := base_api.NewBaseHandler(log)
+	jsonWriter := httpresponse.NewJSONWriter(log)
+	baseHandler := baseapi.NewBaseHandler(log, jsonWriter)
 	baseHandler.RegisterRoutes(mux)
 
-	apiHandler := task_api.NewTaskHandler(ctx, service, log, worker, task_api.Config{WorkersCount: cfg.RunnerCount})
+	apiHandler := taskapi.NewTaskHandler(ctx, service, log, worker, taskapi.Config{WorkersCount: cfg.RunnerCount}, jsonWriter)
 	apiHandler.RegisterRoutes(mux)
 
 	go func() {

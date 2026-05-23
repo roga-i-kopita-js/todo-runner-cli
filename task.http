@@ -14,3 +14,6 @@ Content-Type: application/json
 ### Run
 POST http://localhost:8080/tasks/run
 Content-Type: application/json
+
+### Health
+GET localhost:8080/health

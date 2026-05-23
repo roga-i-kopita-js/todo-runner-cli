@@ -1,4 +1,4 @@
-package task_api
+package taskapi
 
 import (
 	"context"
@@ -7,11 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"todo-runner-cli/internal/httpresponse"
 	"todo-runner-cli/internal/task"
 )
 
-type ErrorResponse struct {
-	Error string `json:"error"`
+type JSONWriter interface {
+	WriteJSON(w http.ResponseWriter, statusCode int, payload any)
 }
 
 type AddTaskRequest struct {
@@ -48,25 +49,23 @@ type Config struct {
 }
 
 type TaskHandler struct {
-	service TaskService
-	logger  *slog.Logger
-	worker  TaskWorker
-	ctx     context.Context
-	cfg     Config
+	service    TaskService
+	logger     *slog.Logger
+	worker     TaskWorker
+	ctx        context.Context
+	cfg        Config
+	jsonWriter JSONWriter
 }
 
-func NewTaskHandler(ctx context.Context, service TaskService, logger *slog.Logger, worker TaskWorker, cfg Config) *TaskHandler {
+func NewTaskHandler(ctx context.Context, service TaskService, logger *slog.Logger, worker TaskWorker, cfg Config, util JSONWriter) *TaskHandler {
 	return &TaskHandler{
-		service: service,
-		ctx:     ctx,
-		cfg:     cfg,
-		logger:  logger,
-		worker:  worker,
+		service:    service,
+		ctx:        ctx,
+		cfg:        cfg,
+		logger:     logger,
+		worker:     worker,
+		jsonWriter: util,
 	}
-}
-
-type StatusResponse struct {
-	Status string `json:"status"`
 }
 
 func validateHeaders(header http.Header) error {
@@ -85,58 +84,49 @@ func (t *TaskHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/tasks/run", t.runHandler)
 }
 
-func (t *TaskHandler) writeJSON(w http.ResponseWriter, statusCode int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		t.logger.Error("failed to write json response", "error", err)
-	}
-}
-
 func (t *TaskHandler) addHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		t.writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
+		t.jsonWriter.WriteJSON(w, http.StatusMethodNotAllowed, httpresponse.ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
 		return
 	}
 
 	headerErr := validateHeaders(r.Header)
 	if headerErr != nil {
-		t.writeJSON(w, http.StatusUnsupportedMediaType, ErrorResponse{Error: headerErr.Error()})
+		t.jsonWriter.WriteJSON(w, http.StatusUnsupportedMediaType, httpresponse.ErrorResponse{Error: headerErr.Error()})
 		return
 	}
 
 	var payload AddTaskRequest
 	if decodeErr := json.NewDecoder(r.Body).Decode(&payload); decodeErr != nil {
-		t.writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: decodeErr.Error()})
+		t.jsonWriter.WriteJSON(w, http.StatusBadRequest, httpresponse.ErrorResponse{Error: decodeErr.Error()})
 		return
 	}
 
 	result, addErr := t.service.Add(task.AddTaskInput{Name: payload.Name, Duration: payload.DurationInSeconds})
 	if addErr != nil {
-		t.writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: addErr.Error()})
+		t.jsonWriter.WriteJSON(w, http.StatusBadRequest, httpresponse.ErrorResponse{Error: addErr.Error()})
 		return
 	}
 
-	t.writeJSON(w, http.StatusCreated, AddTaskResponse{ID: result.ID, Name: result.Name, Status: string(result.Status), DurationInSeconds: result.DurationInSeconds})
+	t.jsonWriter.WriteJSON(w, http.StatusCreated, httpresponse.SuccessResponse{Data: AddTaskResponse{ID: result.ID, Name: result.Name, Status: string(result.Status), DurationInSeconds: result.DurationInSeconds}})
 
 }
 
 func (t *TaskHandler) statsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		t.writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
+		t.jsonWriter.WriteJSON(w, http.StatusMethodNotAllowed, httpresponse.ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
 		return
 	}
 
 	result := t.service.GetStats()
 
-	t.writeJSON(w, http.StatusOK, TaskStats{Queued: result.Queued, Running: result.Running, Done: result.Done, Failed: result.Failed, Canceled: result.Cancelled})
+	t.jsonWriter.WriteJSON(w, http.StatusOK, httpresponse.SuccessResponse{Data: TaskStats{Queued: result.Queued, Running: result.Running, Done: result.Done, Failed: result.Failed, Canceled: result.Cancelled}})
 	return
 }
 
 func (t *TaskHandler) runHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		t.writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
+		t.jsonWriter.WriteJSON(w, http.StatusMethodNotAllowed, httpresponse.ErrorResponse{Error: "method: " + r.Method + " is not allowed"})
 		return
 	}
 
@@ -148,5 +138,5 @@ func (t *TaskHandler) runHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	t.writeJSON(w, http.StatusAccepted, StatusResponse{Status: "started"})
+	t.jsonWriter.WriteJSON(w, http.StatusAccepted, httpresponse.SuccessResponse{Data: httpresponse.StatusResponse{Status: "started"}})
 }
